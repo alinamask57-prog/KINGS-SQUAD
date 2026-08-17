@@ -1,0 +1,215 @@
+// --- Scene Setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111122);
+scene.fog = new THREE.FogExp2(0x111122, 0.015);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// --- Lighting ---
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(20, 40, 20);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.width = 2048;
+dirLight.shadow.mapSize.height = 2048;
+scene.add(dirLight);
+
+// --- Environment: Road & Ground ---
+const roadWidth = 14;
+const roadGeometry = new THREE.PlaneGeometry(roadWidth, 2000);
+const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+const road = new THREE.Mesh(roadGeometry, roadMaterial);
+road.rotation.x = -Math.PI / 2;
+road.receiveShadow = true;
+scene.add(road);
+
+// Road Markings
+for (let z = -900; z < 900; z += 15) {
+  const lineGeo = new THREE.PlaneGeometry(0.4, 6);
+  const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const line = new THREE.Mesh(lineGeo, lineMat);
+  line.rotation.x = -Math.PI / 2;
+  line.position.set(0, 0.01, z);
+  scene.add(line);
+}
+
+// Grass Sides
+const grassGeo = new THREE.PlaneGeometry(200, 2000);
+const grassMat = new THREE.MeshStandardMaterial({ color: 0x114411 });
+const grass = new THREE.Mesh(grassGeo, grassMat);
+grass.rotation.x = -Math.PI / 2;
+grass.position.y = -0.05;
+grass.receiveShadow = true;
+scene.add(grass);
+
+// --- Create Sports Car ---
+function createSportsCar() {
+  const carGroup = new THREE.Group();
+
+  // Car Body Base
+  const bodyGeo = new THREE.BoxGeometry(2, 0.6, 4.2);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff0033, metalness: 0.6, roughness: 0.2 });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 0.5;
+  body.castShadow = true;
+  carGroup.add(body);
+
+  // Car Cabin/Roof
+  const cabinGeo = new THREE.BoxGeometry(1.6, 0.5, 2);
+  const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.1 });
+  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+  cabin.position.set(0, 0.95, -0.2);
+  cabin.castShadow = true;
+  carGroup.add(cabin);
+
+  // Wheels Helper
+  const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 });
+
+  const wheelPositions = [
+    [-1.05, 0.4, 1.3],  // Front Left
+    [1.05, 0.4, 1.3],   // Front Right
+    [-1.05, 0.4, -1.3], // Rear Left
+    [1.05, 0.4, -1.3]   // Rear Right
+  ];
+
+  wheelPositions.forEach(pos => {
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.rotation.z = Math.PI / 2;
+    wheel.position.set(...pos);
+    wheel.castShadow = true;
+    carGroup.add(wheel);
+  });
+
+  // Headlights
+  const lightGeo = new THREE.BoxGeometry(0.4, 0.15, 0.1);
+  const lightMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+  const hl1 = new THREE.Mesh(lightGeo, lightMat);
+  hl1.position.set(-0.6, 0.5, 2.1);
+  const hl2 = new THREE.Mesh(lightGeo, lightMat);
+  hl2.position.set(0.6, 0.5, 2.1);
+  carGroup.add(hl1, hl2);
+
+  return carGroup;
+}
+
+const car = createSportsCar();
+scene.add(car);
+
+// --- Car Physics Variables ---
+let speed = 0;
+const maxSpeed = 1.2;
+const acceleration = 0.015;
+const deceleration = 0.008;
+let turnSpeed = 0;
+const maxTurn = 0.03;
+
+// --- Key Controls ---
+const keys = {
+  ArrowUp: false,
+  ArrowDown: false,
+  ArrowLeft: false,
+  ArrowRight: false,
+  w: false,
+  s: false,
+  a: false,
+  d: false,
+  KeyW: false,
+  KeyS: false,
+  KeyA: false,
+  KeyD: false,
+  Space: false
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') keys.Space = true;
+  if (keys.hasOwnProperty(e.key) || keys.hasOwnProperty(e.code)) {
+    keys[e.key] = true;
+    keys[e.code] = true;
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') keys.Space = false;
+  if (keys.hasOwnProperty(e.key) || keys.hasOwnProperty(e.code)) {
+    keys[e.key] = false;
+    keys[e.code] = false;
+  }
+});
+
+// --- Game Loop ---
+function animate() {
+  requestAnimationFrame(animate);
+
+  const isAccelerating = keys.ArrowUp || keys.w || keys.W || keys.KeyW;
+  const isBraking = keys.ArrowDown || keys.s || keys.S || keys.KeyS;
+  const isTurningLeft = keys.ArrowLeft || keys.a || keys.A || keys.KeyA;
+  const isTurningRight = keys.ArrowRight || keys.d || keys.D || keys.KeyD;
+  const isHandbrake = keys.Space;
+
+  // Acceleration & Braking
+  if (isAccelerating) {
+    if (speed < maxSpeed) speed += acceleration;
+  } else if (isBraking) {
+    if (speed > -maxSpeed / 2) speed -= acceleration;
+  } else {
+    // Natural friction
+    if (speed > 0) speed = Math.max(0, speed - deceleration);
+    if (speed < 0) speed = Math.min(0, speed + deceleration);
+  }
+
+  // Handbrake Logic
+  if (isHandbrake) {
+    speed *= 0.92;
+  }
+
+  // Steering Logic
+  if (speed !== 0) {
+    const dir = speed > 0 ? 1 : -1;
+    if (isTurningLeft) {
+      car.rotation.y += maxTurn * dir;
+    }
+    if (isTurningRight) {
+      car.rotation.y -= maxTurn * dir;
+    }
+  }
+
+  // Movement
+  car.position.x += Math.sin(car.rotation.y) * speed;
+  car.position.z += Math.cos(car.rotation.y) * speed;
+
+  // Road Bounds Boundary (Keep inside track limits)
+  const bound = (roadWidth / 2) - 1.2;
+  if (car.position.x > bound) car.position.x = bound;
+  if (car.position.x < -bound) car.position.x = -bound;
+
+  // Camera Follow Car
+  const cameraOffset = new THREE.Vector3(0, 3, -7);
+  cameraOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+  camera.position.x = car.position.x + cameraOffset.x;
+  camera.position.y = car.position.y + cameraOffset.y;
+  camera.position.z = car.position.z + cameraOffset.z;
+  camera.lookAt(car.position.x, car.position.y + 1, car.position.z);
+
+  // Update Speedometer UI
+  const speedKMH = Math.abs(Math.round(speed * 180));
+  document.getElementById('speed').innerText = speedKMH;
+
+  renderer.render(scene, camera);
+}
+
+// Window Resize Handle
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// Start Loop
+animate();
